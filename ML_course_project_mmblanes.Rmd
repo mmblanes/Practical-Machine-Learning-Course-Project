@@ -1,0 +1,130 @@
+---
+title: "Machine Learning: Prediction Assignment Writeup"
+author: "Manuel Martínez Blanes"
+date: "6 de agosto de 2016"
+output: html_document
+---
+
+## Synopsis  
+In this project, we are given data from accelerometers on the belt, forearm, arm, and dumbell of 6 research study participants. Our training data consists of accelerometer data and a label identifying the quality of the activity the participant was doing. Our testing data consists of accelerometer data without the identifying label. Our goal is to predict the labels for the test set observations.
+Below is the code I used when creating the model, estimating the out-of-sample error, and making predictions. I also include a description of each step of the process.
+
+## Getting and managing the data
+
+We install the packages that will be used
+```{r}
+library(caret)
+library (randomForest)
+```
+
+### Getting the data
+```{r}
+strain <- read.csv("pml-training.csv")
+stest <- read.csv("pml-testing.csv")
+```
+
+### Partioning Training data set
+Because we want to be able to estimate the out-of-sample error, we randomly split the full training data (strain) into a smaller training set (strain1) and a validation set (strain2). There are 19,622 observations in the training set, so in order to reduce time and to be able to perform cross-validation, a training subset is created with 70% of the original training data set to be used for training and the remaining 30% to be used as the testing set (before final testing is performed).
+
+```{r}
+set.seed(1969)
+inTrain <- createDataPartition(y=strain$classe, p=0.7, list=F)
+strain1 <- strain[inTrain, ]
+strain2 <- strain[-inTrain, ]
+```
+
+### Cleaning the data sets
+The data provided has many variables with missing data as well as information that is not relevant to the question being analyzed.
+Now, we going to reduce the number of features by removing variables with nearly zero variance, variables that are almost always NA, and variables that don't make intuitive sense for prediction. Note that we decide which ones to remove by analyzing strain1, and perform the identical removals on strain2:
+
+```{r}
+# remove variables with nearly zero variance
+nzv <- nearZeroVar(strain1)
+strain1 <- strain1[, -nzv]
+strain2 <- strain2[, -nzv]
+
+# remove variables that are almost always NA
+mostlyNA <- sapply(strain1, function(x) mean(is.na(x))) > 0.95
+strain1 <- strain1[, mostlyNA==F]
+strain2 <- strain2[, mostlyNA==F]
+
+# remove variables that don't make intuitive sense for prediction (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp), which happen to be the first five variables
+strain1 <- strain1[, -(1:5)]
+strain2 <- strain2[, -(1:5)]
+```
+
+## Model Building
+I have decided to start with a Random Forest model, to see if it would have acceptable performance. I fit the model on ptrain1, and instruct the "train" function to use 3-fold cross-validation to select optimal tuning parameters for the model.
+```{r}
+# We instruct train to use 3-fold CV to select optimal tuning parameters
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+
+# We fit model on strain1
+fit <- train(classe ~ ., data=strain1, method="rf", trControl=fitControl)
+```
+
+
+```{r}
+# We print final model to see tuning parameters it chose
+fit$finalModel
+```
+We see that it decided to use 500 trees and try 27 variables at each split.
+
+## Model Evaluation and Selection
+Now, we use the fitted model to predict the label ("classe") in strain2, and show the confusion matrix to compare the predicted versus the actual labels
+
+```{r}
+# Wuse model to predict classe in validation set (strain2)
+preds <- predict(fit, newdata=strain2)
+
+# show confusion matrix to get estimate of out-of-sample error
+confusionMatrix(strain2$classe, preds)
+```
+
+The accuracy is 99.6%, thus my predicted accuracy for the out-of-sample error is 0.4%.
+Our model has obtained an excellent result, so rather than trying additional algorithms, we'lll use Random Forests to predict on the test set.
+
+## Re-training the Selected Model
+Before predicting on the test set, it is important to train the model on the full training set (strain), rather than using a model trained on a reduced training set (strain1), in order to produce the most accurate predictions. Therefore, we now repeat everything we did above on strain and stest:
+
+```{r}
+# We remove variables with nearly zero variance
+nzv <- nearZeroVar(strain)
+strain <- strain[, -nzv]
+stest <- stest[, -nzv]
+
+# We remove variables that are almost always NA
+mostlyNA <- sapply(strain, function(x) mean(is.na(x))) > 0.95
+strain <- strain[, mostlyNA==F]
+stest <- stest[, mostlyNA==F]
+
+# We remove variables that don't make intuitive sense for prediction (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp), which happen to be the first five variables
+strain <- strain[, -(1:5)]
+stest <- stest[, -(1:5)]
+
+# We re-fit model using full training set (strain)
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+fit <- train(classe ~ ., data=strain, method="rf", trControl=fitControl)
+```
+
+## Test Set Predictions (generating files to submit as answers for the assignment)
+Now, we use the model fit on strain to predict the label for the observations in stest, and write those predictions to individual files.
+```{r}
+# We predict on test set
+preds <- predict(fit, newdata=stest)
+
+# We convert predictions to character vector
+preds <- as.character(preds)
+
+# We create a function to generate files with predictions to submit for assignment
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# We create prediction files to submit
+pml_write_files(preds)
+```
